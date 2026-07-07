@@ -1,0 +1,647 @@
+---
+title: "Correlaciones entre genes: coexpresión"
+subtitle: "Fichero _`r knitr::current_input()`_ || v260706"
+author: 
+  - "[MGC^![](https://info.orcid.org/wp-content/uploads/2019/11/orcid_16x16.png)^](https://orcid.org/0000-0002-0112-3550)"
+  - "_Departamento de Biología Molecular y Bioquímica e IHSM-CSIC-UMA_"
+date: "Last update: `r format(Sys.time(), '%A %d, %B %Y. %X')`"
+output: 
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_float: 
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 5
+    theme: default # spacelab
+    code_folding: "hide"
+bibliography: correlabiblio.bib
+link-citations: true
+abstract: |
+  Nociones básicas sobre la estrategia para establecer los genes que siguen el mismo patrón de expresión en las distintas condiciones experimentales de una RNA-seq. Suele ser muy importante encontrar genes concentradores (_hubs_) que están muy correlacionados con genes de uno o varios procesos.
+  
+  Flujo de trabajo desarrollado en el grupo de investigación **iBIP**: [Integrative Bioinformatics for Plant Stress](https://www.ihsm.uma-csic.es/grupos/15), al que puedes seguir en las redes sociales:
+  
+  - Instagram: [\@ihsm_bioinformatics](https://www.instagram.com/ihsm_bioinformatics/)
+  - Twitter: [\@IHSM_Bioinfo](https://x.com/IHSM_Bioinfo)
+  - Tiktok: [ihsm.bioinformatics](https://www.tiktok.com/@ihsm.bioinformatics)
+  - Correo-e: <ihsm.bioinformatics@gmail.com>
+
+  *****
+  
+  **Memoria ocupada** = `r round(pryr::mem_used()/1000000, 2)` MB
+  
+  **Ordenador**: `r Sys.info()[c(7, 4, 1, 5)]`
+
+  *****
+---
+
+```{r setup, include=FALSE}
+# limpia la memoria RAM, siempre que no se definan 'params'
+# rm(list = ls()) # Si lo hacemos, se pierden los 'params'
+
+T00 <- proc.time() # initial time
+
+if(!require(knitr, quietly = TRUE)){
+  install.packages("knitr", dependencies=TRUE)
+  library("knitr")
+}
+opts_chunk$set(echo = TRUE)
+
+# Definamos unas variables para mostrar bloque de texto en un color concreto
+# padding: /* arriba | izquierda y derecha | abajo */
+INFER <- "<div style = 'background-color: SlateBlue; 
+                        color: white;
+                        padding: 10px 10px 8px;
+                        margin-bottom: 10px;
+                        border-radius: 4px'>**INFERENCE** <br>" # Violet: result interpretation
+NOTE <- "<div class='alert alert-info'>**INFO** <br>" # blue: Accessory info to notice or skim
+OK <- "<div class='alert alert-success'>**SUCCESS!** <br>" # green: info to be more successful
+WARN <- "<div class='alert alert-warning'>**WARNING!** <br>" # yellow: potential negative consequences
+DANGER <- "<div class='alert alert-danger'>**DANGER!** <br>" # red: action with dangerous consequences
+EXPAND <- '<details  style = "background-color: SeaShell; 
+                              border: 2px solid wheat;
+                              border-radius: 5px; 
+                              padding: 10px 10px 10px 10px;"> 
+          <summary markdown = "span" 
+                   style = "background-color: mintCream; 
+                            color: darkGreen; 
+                            padding: 3px 2px 3px 2px;">'
+```
+
+# Correlación y coexpresión
+
+La coexpresión refleja una **similitud en los patrones de expresión génica** en diversas condiciones experimentales. Su utilidad radica en que los genes que comparten reguladores tienden a estar relacionados funcionalmente [@Parsana2019jm; @Emamjomeh2017tn], que no es más que seguir la propuesta de @Beiki2016db denominada _guilt-by-association_ (culpabilidd por asociación). 
+
+`r NOTE`
+Se supone que los genes que comparten la misma función o que participan en el mismo proceso celular están corregulados, por lo que presentarán perfiles de expresión parecidos y se aglomerarán en módulos o comunidades de la red
+</div>
+
+Para buscar la coexpresión se usan como sustitutos los **coeficientes de correlación**, de los que el de Pearson es el más popular, si bien podríamos usar el de Spearman, la distancia Euclidiana y otros  [@TIERI2019]. En los experimentos de expresión génica, la correlación hemos visto que produce una tabla con pares de genes que presentan un perfil de expresión similar en las muestras analizadas. Se consideran significativos los que tiene una correlación superior a un umbral (que en este _script_ quedará determinado por `R_MIN` y `P_MIN`).
+
+Para considerar que **una serie de genes se coexpresan**, debemos realizar, como mínimo, las siguientes operaciones [@Serin:2016uw]:
+
+1. **Eliminar** los genes que varían poco (se hizo al preparar los datos para la correlación entre columnas)-
+2. **Trasponer** la matriz resultante para que los genes queden ahora en las columnas (recuerda que las correlaciones se calculan siempre entre columnas).
+3. Calcular la **correlación**. Aunque la _r_ de Pearson es la más popular para las correlaciones lineales, en biología no siempre son lineales, por lo que vimos en el _script_ C.1 es mejor usar la **$\rho$ de Spearman**.
+4. Seleccionar las correlaciones **significativas** basándose en la _P_ ajustada para controlar el problema del azar en los análisis masivos.
+
+***
+
+
+
+# Define el entorno {.tabset .tabset-fade .tabset-pills}
+
+En este apartado debes incluir todo lo que piensas que se puede cambiar para hacer distintos análisis. De esa manera, no tienes que meterte en el código cada vez que quieras cambiar el nombre de un fichero o algún parámetro.
+
+## Librerías necesarias
+
+```{r Librerías, warning=FALSE, message=FALSE}
+# cálculo de correlaciones, P y P ajustada
+if(!require(psych, quietly = TRUE)){
+  install.packages("psych", dependencies=TRUE)
+  library("psych")
+}
+
+# representación de correlogramas
+if(!require(corrplot, quietly = TRUE)){
+  install.packages("corrplot", dependencies=TRUE)
+  library("corrplot")
+}
+
+# Para las representaciones gráficas más versátiles
+if(!require(ggplot2, quietly = TRUE)){
+  install.packages("ggplot2", dependencies=TRUE)
+  library("ggplot2")
+}
+
+# Para hacer gráficos interactivos
+if(!require(plotly, quietly = TRUE)){
+  install.packages("plotly", dependencies=TRUE)
+  library("plotly")
+}
+
+# Para reformatear las tablas para que ggplot() las represente bien
+if(!require(reshape2, quietly = TRUE)){
+  install.packages("reshape2", dependencies=TRUE) 
+  library("reshape2") # reshape wide data.frame to a long format
+}
+
+# Para las redes estáticas
+if(!require(igraph, quietly = TRUE)){
+  install.packages("igraph", dependencies=TRUE)
+  library("igraph")
+}
+
+# Para las redes interactivas
+if(!require(visNetwork, quietly = TRUE)){
+  install.packages("visNetwork", dependencies=TRUE)
+  library("visNetwork")
+}
+```
+
+***
+
+## Funciones del usuario
+
+Volvemos a incluir la función `calculaVars()` que definimos en el _script_ 3.1
+
+```{r calculaVarsFunct}
+calculaVars <- function(expData){
+  # Convertir el formato compatible a data.frame
+  tdata <- as.data.frame(expData)
+  ini_samples <- ncol(tdata) # columnas con las que calcular los índices
+
+  # Obtaining the mean of the expression values
+  tdata$mean <- rowMeans(tdata, na.rm = TRUE)
+  
+  # Obtaining the dispersion D to each row
+  Disp <- function(x){var(x, na.rm = TRUE)/abs(mean(x, na.rm = TRUE))}
+  # Apply the function to the expression matrix
+  tdata$d <- apply(tdata[, 1:ini_samples], 1, Disp)
+
+  # Obtaining the coefficient of variation CV to each row
+  CV <- function(x){sd(x, na.rm = TRUE)/abs(mean(x, na.rm = TRUE))}
+  # Apply the function to the expression matrix
+  tdata$cv <- apply(tdata[, 1:ini_samples], 1, CV)
+  
+  # Obtaining the coefficient of dispersion COD to each row
+  COD <- function(x){mad(x, na.rm = TRUE)/abs(median(x, na.rm = TRUE))}
+  # Apply the function to the expression matrix
+  tdata$cod <- apply(tdata[, 1:ini_samples], 1, COD)
+
+  # Return the expression matrix with the mean, the CV and the COD
+  return(tdata)
+}
+```
+
+***
+
+## Configura los parámetros
+
+```{r conf-params}
+# Núero máximo de genes a correlacionar y analizar
+GENES_MAX <-  400 # echará unos 5 min en calcular las correlaciones y las P
+
+# Método de correlación preferido
+CORR_METHOD <- "spearman"
+
+# Correlación mínima que se considera útil
+R_MIN <- 0.8  # podríamos llegar incluso a 0.9
+
+# Significación estadística mínima, que se puede subir incluso a 0,001
+P_MIN <- 0.05
+
+# Genes en los que tenemos un interés especial
+MY_IDS <- c("ESR42942", "ESR43003", "ESR56172", "ESR42546", "ESR42547", "ESR42558")
+# MY_IDS <- NULL # si no se quiere mirar ninguno
+```
+
+****
+
+
+
+## Carga de la matriz de datos
+
+Leer la matriz de datos filtrados `matriz-filt.tsv` guardada con el script C.1
+
+```{r load-matrix}
+matriz_filt <- as.matrix(read.table("matriz-filt.tsv", # nombre del fichero
+                               sep="\t",               # separado por tabuladores
+                               header = T,             # hay cabecera
+                               row.names = 1           # ID de genes en 1ª columna
+                               )
+                    )
+cat("Dimensiones de la tabla leída (filas x columnas): ", dim(matriz_filt), "\n")
+    
+kable(matriz_filt[1:5, 1:6], caption = "Primeras 5 filas (genes) y las 6 primeras columnas (muestras) de la matriz filtrada")
+```
+
+*** 
+
+
+```{r Parada_1}
+knit_exit("**Parada_1**: Para seguir, hay que desactivar esta parada poniendo un `#` delante de `knit_exit`.")
+```
+
+
+# Correlaciones entre genes {.tabset .tabset-fade .tabset-pills}
+
+## Trasposición
+
+Para ello hay que trasponer con `t()` la matriz original, y así los genes quedan en las columnas. Recuerda que hemos de usar la matriz `matriz_filt` que contiene solo los genes que varían lo suficiente para obtener correlaciones.
+
+```{r traspomatriz}
+matriz_filt_t <- t(matriz_filt)
+kable(matriz_filt_t[1:5, 1:6], caption = "Primeras 5 filas (muestras) y las 6 primeras columnas (genes) de la matriz filtrada y traspuesta")
+```
+
+## Cálculo de correlaciones
+
+Vamos a calcular el cofienciente de correlación de cada gen con los otros de con la tabla traspuesta.
+El resultado los representamos como un correlograma.
+
+```{r corrP}
+n2print <- min(25:ncol(matriz_filt_t))  # máximo número de genes a representar
+# Correlaciones entre los genes, con ci=F si no hay más de GENES_MAX genes
+if (nrow(matriz_filt) > GENES_MAX) {
+  message("Demasiados genes (", nrow(matriz_filt), ") y no se calcularán las P")
+  corr_genes_r <- cor(matriz_filt_t, method = CORR_METHOD)
+  corPlot(corr_genes_r[1:n2print, 1:n2print], 
+          diag = FALSE,
+          las = 2, 
+          cex = 0.5,
+          scale = TRUE,
+          main = "Correlograma COR de los primeros genes")
+} else {
+  # se calcula la r y la P con corr.test()
+  corr_genes <- corr.test(x = matriz_filt_t, ci = FALSE, method = CORR_METHOD)
+  corPlot(corr_genes$r[1:n2print, 1:n2print], 
+          diag = FALSE,
+          las = 2, 
+          scale = TRUE,
+          pval = corr_genes$p[1:n2print, 1:n2print],
+          main = "Correlograma COR.TEST de los primeros genes")
+}
+```
+
+De esta forma tendremos solo una de estas dos **matrices de correlación**:
+
+* `corr_genes_r` si solo hemos calculado la _r_ porque hay muchos genes, o bien
+* `corr_genes` con la _r_ y las _P_ si hay menos genes que los definidos en `GENES_MAX`.
+
+
+## Parejas correlacionadas
+
+Para el posterior estudio de redes, hay que convertir las matrices de correlación (y sus _P_ si se han calculado) en un `data.frame` en el que estén los nombres de los dos genes correlacionados, su _r_ y, si se calculó, su _P ajustada_ (mejor que simplemente la _P_; por eso usamos la función `corr.test()` en lugar de `cor.test()`).
+
+```{r corr_df}
+# obtenemos las listas de correlaciones con y sin P, según se haya hecho
+# filtradas solo por las r y/o P mínimas definidas al principio
+if (exists("corr_genes_r")) {                     # solo hay r
+   m <- corr_genes_r                     
+   # Convertir el resultado en un df por parejas de genes
+   corr_list = data.frame(Item1 = rownames(m)[row(m)[upper.tri(m)]],
+                          Item2 = colnames(m)[col(m)[upper.tri(m)]],
+                          r = m[upper.tri(m)])
+  
+  # filtramos solo las correlaciones significativas
+  corr_df = corr_list[abs(corr_list$r) >= R_MIN,]
+  
+  # ponemos solo 2 decimales a la r
+  corr_df$r <- format(round(corr_df$r,2), nsmall = 2)
+  
+  rm(m)
+} else if (exists("corr_genes")) {                       # sí hay P y r
+  m <- corr_genes$r
+  p <- corr_genes$p
+  corr_list = data.frame(Item1 = rownames(m)[row(m)[upper.tri(m)]],
+                         Item2 = colnames(m)[col(m)[upper.tri(m)]],
+                         r = m[upper.tri(m)],
+                         P = p[lower.tri(p)],
+                         P.adj = p[upper.tri(p)])
+  
+  # filtramos solo las correlaciones significativas
+  corr_df = corr_list[abs(corr_list$r) >= R_MIN & corr_list$P.adj <= P_MIN,]
+  
+  # ponemos solo 3 decimales a la r y 4 a las P
+  corr_df$r <- format(round(corr_df$r, 3), nsmall = 3)
+  corr_df$P <- format(round(corr_df$P, 4), nsmall = 4)
+  corr_df$P.adj <- format(round(corr_df$P.adj, 4), nsmall = 4)
+  
+  rm(m, p)
+} else {                                  # verificación de seguridad
+  stop("Algo ha fallado y no existen correlaciones") 
+}
+```
+
+Veamos ahora en forma de tabla el aspecto que tienen los primeros elementos de las correlaciones:
+
+```{r}
+kable(head(corr_df, n = 5L), caption = "Primeras 5 parejas de genes del fichero de correlaciones")
+```
+
+## Resumen
+
+Entidad | Había | Sobreviven
+ :--- | :--- | :---
+Condiciones   | `r ncol(matriz_filt)` | `r ncol(matriz_filt)`
+Genes         | Ver script C.1        | `r nrow(matriz_filt)`
+Correlaciones | `r nrow(corr_list)`   | `r nrow(corr_df)`
+
+## Guarda las parejas
+
+Guardamos la tabla de las correlaciones significativas en un fichero que servirá, entre otras cosas, para ver y analizar en [Cytoscape](https://cytoscape.org):
+
+```{r Savecorr_df}
+write.table(corr_df, 
+            file = "BestCorrelations.tsv", 
+            sep = "\t", 
+            row.names = FALSE,
+            col.names = TRUE, 
+            quote = FALSE)
+```
+
+
+***
+
+```{r Parada_2}
+knit_exit("**Parada_2**: Para seguir, hay que desactivar esta parada poniendo un `#` delante de `knit_exit`.")
+```
+
+# Expresión de genes de interés
+
+Vamos a ver si alguno de los genes definidos en el parámetro `MY_IDS` aparece en la tabla filtrada, para ver cómo se expresa en las distintas condiciones experimentales. También calcularemos con qué genes se correlaciona mejor de los que hay en la matriz `matriz_filt`.
+
+
+## Obtención de datos
+
+Esta parte se ejecutará siempre que la variable `MY_IDS` no esté vacía.
+
+```{r hayIDs}
+HAYGENES <- length(MY_IDS) > 0
+# los datos. Si solo hay un ID, se vuelve vector
+myIDs_expr <- matriz_filt[rownames(matriz_filt) %in% MY_IDS, ]
+```
+
+## Gráficos de perfiles {.tabset .tabset-fade .tabset-pills}
+
+Los perfiles de expresión de los genes de interés en `MY_IDS` los vamos a representar con `ggplot2::ggplot()`. Vamos a manipular un poco los datos para representarlos:
+
+```{r keepGenesggPlot, eval=HAYGENES}
+# Con ggplot hay que trasponer la matriz
+xxx <- data.frame(t(myIDs_expr))
+
+# el índce no pueden ser caracteres. Por eso rownames(xxx) no vale
+# new_x <- rep(1:4, each=3)
+new_x <- 1:12
+samples_names <- rownames(xxx)
+xxx <- cbind(new_x, xxx) 
+# reordenamos la tabla para que ggplot la represente bien
+xxx2 <- melt(xxx,  id.vars = 'new_x', variable.name = 'gene')
+head(xxx2)
+```
+
+
+Ahora ya podemos representarlos de tres formas:
+
+
+### Interactivo
+
+La interactiva habitual sin fondo gris, con puntos redondos y personalización del nombre de los ejes. Esta necesita, además de la librería `ggplot2`, la de `plotly`. Es muy útil cuando se representan muchas líneas, con lo que la leyenda sería muy confusa.
+
+```{r InteractivePlot, eval=HAYGENES}
+ggp <- ggplot(xxx2, aes(new_x, value)) + 
+        # colour lines per gene
+        geom_line(aes(colour = gene)) +
+        # resize points with the same colour than lines
+        geom_point(size = 1.25, aes(colour = gene)) +
+        # change x continuous labels for sample names
+        scale_x_continuous(name = "Samples", breaks = 1:length(samples_names), labels = samples_names) + 
+        # change legend and Y title
+        scale_y_continuous(name = "Log-expression level") +
+        # add the title
+        ggtitle("Interactive profiles of selected genes") +
+        # simplify the plot lines and colours
+        theme_linedraw() + 
+        # change orientation and size of sample names, title, background, legend, axis...
+        theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+              legend.position = "none",
+              panel.grid = element_line(color = "lightgray", linewidth = 0.5),
+              plot.title = element_text(lineheight = 0.8, face = "bold", size = 12, colour = "darkgreen"))
+
+# print the interactive plot created with ggplot()
+ggplotly(ggp)
+```
+
+Pasa el ratón por cada línea del gráfico y te dirá qué gen es, así como el valor de expresión del punto sobre el que se encuentra el ratón. Verás también que en la parte superior aparecen iconos de zoom, selección, guardar imagen, desplazar, etc.
+
+
+### Con intervalo de confianza
+
+Sin el fondo gris a la que añadimos el intervalo de valores (con fondo gris) en el que aparece un ajuste suave (_smooth_) en naranja; dejamos que tome los nombres de los ejes por defecto. En este caso se incluye la leyenda, dado que los genes son los mismos que en la interactiva.
+
+```{r PlotGenesggPlot1, eval=HAYGENES, fig.show='hold'}
+# método clásico con línea de tendencia e intervalo
+ggplot(xxx2, aes(x=new_x, y=value)) +
+  # poner línea en roja y = 0
+  geom_hline(yintercept=0, linetype=4, color="red") +
+  geom_line(aes(colour=gene, group=gene), linewidth=0.5, alpha=0.3) +
+  # indicar las columnas de valor+SD y valor-SD para barras de error
+  # geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2)) +
+  # Trend line with confidence interval
+  geom_smooth(method = 'loess', linewidth = 2, se = TRUE, color = "orange") +
+  # another theme for lines and colours
+  theme_light()
+```
+
+### Con tendencia media
+
+La normal, pero sin puntos redondos, con un ajuste exacto en azul y el nombre de los ejes lo tomamos del nombre de la columna correspondiente.
+
+```{r PlotGenesggPlot2, eval=HAYGENES, fig.show='hold'}
+# para no depender de los nombres de las columnas, con valor medio y fondo típico de ggplot
+ggcolnam <- colnames(xxx2)
+ggplot(xxx2, aes(x=xxx2[, 1], y=xxx2[, 3])) +
+  # poner línea roja en y = 0
+  geom_hline(yintercept=0, linetype=4, color="red") +
+  geom_line(aes(colour=xxx2[, 2], group=xxx2[, 2]), linewidth=0.5, alpha=0.3) + 
+  # indicar las columnas de valor+SD y valor-SD para barras de error
+  # geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2)) +
+  # mean line in blue
+  stat_summary(aes(y=xxx2[, 3]), fun=mean, geom='line', linewidth=2, color='blue') + 
+  scale_x_continuous(name = ggcolnam[1], breaks = 1:length(samples_names), labels = samples_names) + 
+   # change orientation and size of sample names
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  # change legend and Y title
+  scale_y_continuous(name = ggcolnam[3]) +
+  labs(colour = ggcolnam[2])
+```
+
+***
+
+```{r Parada_3}
+knit_exit("**Parada_3**: Para seguir, hay que desactivar esta parada poniendo un `#` delante de `knit_exit`.")
+```
+
+
+# Redes de coexpresión
+
+Vamos a correlacionar los genes de interés, siempre que los haya, como se indica en la variable `HAYGENES` con el resto de los compañeros en `matriz_filt` como ejemplo de cómo correlacionar **dos vectores**, siempre que el número y orden de las columnas (las muestras) sea el mismo en ambas matrices. Estas matrices se consideran la `x` y la `y` de la función `stats::cor.test()` para filtrar por la significación de la correlación.
+
+## Correlaciones específicas
+
+1. Obtenemos los datos para cada gen en `MY_IDS` que aparece en `matriz_filt`, dado que puede haber IDs que no están en la matriz que tenemos y nos daría error después. Modificaremos la variable `HAYGENES` por si acaso no hubiera ninguno.
+
+    ```{r corXY1, eval=HAYGENES, warning=FALSE}
+    # IDs de MY_IDS que sí están en matriz_filt
+    myIDs_exrp_names <- rownames(matriz_filt)[rownames(matriz_filt) %in% MY_IDS]
+    
+    HAYGENES <- length(myIDs_exrp_names) > 0
+    if (HAYGENES) message("Genes semilla con los que buscar correlaciones: ", toString(myIDs_exrp_names))
+    ```
+
+
+2. Creamos un `data.frame`donde guardaremos las correlaciones.
+
+    ```{r corXY2, eval=HAYGENES, warning=FALSE}
+    myCorr_df <- data.frame(
+      Item1 = numeric(), 
+      Item2 = numeric(), 
+      r = numeric(), 
+      abs.r = numeric(), 
+      P = numeric()
+    )
+    myCorr_df[1,] <- c(0, 0, 0, 0, 0) # la eliminamos luego
+    ```
+
+3. Creamos un doble bucle en el que se recorre la matriz de mis genes de interés `myIDs_exrp_names` para correlacionarlos con cada uno de los genes en `matriz_filt`. Pero cuando `myIDs_exrp_names` solo contiene un elemento, hay que hacerle un tratamiento especial
+
+    ```{r corXY3, eval=HAYGENES, warning=FALSE, results='hide'}
+    # cuántas vueltas hay que darle a la matriz myIDs_exrp_names
+    id_cicles <- length(myIDs_exrp_names)
+    # cuántas vueltas hay que darle a la matriz matriz_filt
+    row_cicles <- nrow(matriz_filt) # número de filas
+    
+    # correlacionar los genes de una matriz con los de la otra
+    if (id_cicles == 1) {                 # solo hay una fila en myIDs_exrp_names
+      myIDs_expr <- as.vector(myIDs_expr) # convertir la fila en un vector
+      for (i in 1:row_cicles) {           # empezamos a recorrer matriz_filt
+        # correlaciona fila de x=myIDs_exrp_names con cada fila de y=matriz_filt
+        r_p <- cor.test(myIDs_expr, matriz_filt[i,], method=CORR_METHOD) 
+        # añade resultados al dataframe myCorr_df: miGen, GenMatriz, r, |r| y P
+        myCorr_df <- rbind(myCorr_df, c(myIDs_exrp_names, rownames(matriz_filt)[i], r_p$estimate, abs(r_p$estimate), r_p$p.value))
+      }
+    } else {                              # podemos recorrer myIDs_exrp_names
+      for (j in 1:id_cicles) {
+        for (i in 1:row_cicles) {
+          r_p <- cor.test(myIDs_expr[j,], matriz_filt[i,], method=CORR_METHOD)
+          myCorr_df <- rbind(myCorr_df, c(myIDs_exrp_names[j], rownames(matriz_filt)[i], r_p$estimate, abs(r_p$estimate), r_p$p.value))
+        }
+      }
+    }
+    
+    # eliminamos la primera columna porque la habíamos llenado de ceros
+    myCorr_df <- myCorr_df[-1, ]
+    
+    # vemos el comienzo de las correlaciones que se han hecho
+    kable(head(myCorr_df), caption = "Primeras correlaciones calculadas")
+    ```
+
+4. Nos quedamos con las correlaciones que tienen $|r| ≥ R\_MIN$ y $P ≤ P\_MIN$. 
+
+    ```{r corXY4, eval=HAYGENES, warning=FALSE, results='hide'}
+    # filtramos por correlacion y significatividad
+    tmp = myCorr_df[myCorr_df$abs.r >= R_MIN & myCorr_df$P <= P_MIN,]
+    # la ordenamos
+    myCorr_ord <- tmp[order(tmp$abs.r, decreasing = TRUE), ]
+    rm(tmp) # eliminamos variables innecesarias
+    message(paste0("Número de correlaciones que pasan: ", nrow(myCorr_ord)))
+    kable(head(myCorr_ord), caption = "Correlaciones más altas con los genes de interés")
+    ```
+
+5. Guardamos los resultados de las parejas de genes con sus valores de correlación, correlación absoluta y _P_.
+
+    ```{r corXY5, eval=HAYGENES, warning=FALSE}
+    # Guardamos las parejas de correlaciones
+    write.table(myCorr_ord, 
+                file = "Correlacion_con_genes_de_interes.tsv", 
+                sep = "\t", 
+                col.names = NA, 
+                quote = FALSE)
+    
+    ```
+
+
+## Red resultante {.tabset .tabset-fade .tabset-pills}
+
+### Básica
+
+Construyamos la **red de correlación** con las parejas de genes, que corresponden a las dos primeras columnas del data frame `myCorr_ord`. Marcamos rodeados por un círculo de color cada uno de los genes que se usaron de semilla, que recogimos en la variable `myIDs_exrp_names`. Pongamos `weighted=TRUE` para marcar, si queremos el grosor de la conexión en función de la correlación (que se encuentra en la columna 4; si no se encuentra, parará con error).
+
+```{r corXY6, eval=HAYGENES, warning=FALSE}
+aNet <- graph.data.frame(myCorr_ord[, 1:2], directed = FALSE)
+plot.igraph(aNet, 
+   main = "Correlation-based network", 
+   mark.groups = myIDs_exrp_names,  # marca los genes de interés
+   vertex.label = NA,
+   vertex.size = 8)
+```
+
+*** 
+
+### Interactiva
+
+Ahora representamos la misma red, pero interactiva, gracias a la función `visNetwork::visIgraph()` que admite la representación del objeto `igraph`:
+
+- **Mueve los nodos** de posición haciendo clic en ellos y arrástrándolos. 
+- Con la rueda del ratón puedes **hacer zoom** sobre ella y entonces verás a qué gen corresponde cada nodo. 
+- Puedes hacer clic y arrastrar para **adentrarte** en distintos aspectos de la misma. 
+
+```{r corXY7, eval=HAYGENES, warning=FALSE}
+visIgraph(aNet)
+```
+
+***
+
+
+### Más interacción
+
+Vamos a ir un paso más lejos con la librería `visNetwork` y vamos en primer lugar a [convertir el objeto `igraph` en uno propio de esta librería](https://towardsdatascience.com/from-igraph-to-visnetwork-7bc5a76fdeec) con la función `toVisNetworkData()` y luego [usaremos la función `visNetwork()`](https://www.rdocumentation.org/packages/visNetwork/versions/2.1.2/topics/visNetwork-igraph) que se construye con la misma filosofía que las de `ggplot`. Lo que [añadiremos](https://github.com/thatdarndata/BlogPosts/tree/main/igraph2visNetwork) será:
+
+- Con la rueda del ratón podemos cambiar el **zoom**.
+- Podemos **desplazar los nodos**, pero no siempre se quedarán donde los dejamos ya que estima internamente cómo se organizan mejor.
+- El **grosor de la conexión** dependerá ahora de la correlación absoluta `myCorr_ord$abs.r`, que lo pasaremos al campo `value` del nuevo objeto.
+- Cambiamos el **color** de los nodos a verde.
+- Ponemos una **sombra** en los nodos en función de su grado de conectividad.
+
+```{r corXY8, eval=HAYGENES, fig.align='center', warning=FALSE}
+# convert igraph object to VisNetwork-list
+vnNet <- toVisNetworkData(aNet)
+# copy column "abs.r" from myCorr_ord to new column "value" in list "edges"
+vnNet$edges$value <- myCorr_ord$abs.r
+visNetwork(nodes = vnNet$nodes, edges = vnNet$edges) %>% 
+  visOptions(nodesIdSelection = TRUE,  highlightNearest = list(enabled = TRUE, hover = TRUE, degree = 2)) %>%
+  visNodes(color = "#6CAE97", shadow = TRUE)
+```
+
+Consulta [este enlace](http://www.htmlwidgets.org/showcase_visNetwork.html) para conocer otras opciones de configurar la red añadiendo los campos `shape, size` y `color` al nuevo objeto `vnNet`.
+
+
+***
+
+# Referencias
+
+<div id="refs"></div>
+
+***
+
+# Para saber más
+
+* [Correlation Test Between Two Variables in R](http://www.sthda.com/english/wiki/correlation-test-between-two-variables-in-r)
+* [Pearson correlation vs. Spearman correlation methods](https://www.surveymonkey.com/market-research/resources/pearson-correlation-vs-spearman-correlation/)
+* [Correlation coefficients and tests](https://statsandr.com/blog/correlation-coefficient-and-correlation-test-in-r/)
+* [Add p-Values to Correlation Matrix](https://statisticsglobe.com/add-p-values-correlation-matrix-plot-r)
+* [Correlation coefficient and correlation test in R](https://www.r-bloggers.com/2020/05/correlation-coefficient-and-correlation-test-in-r/)
+
+***
+
+# Entorno de la ejecución
+
+```{r tiempo_total, results='hold'}
+# T00 calculado en el primer chunk
+Tff <- proc.time()
+T_total <- Tff - T00
+
+print("Tiempo empleado en la ejecución:")
+print(T_total)
+```
+
+El tiempo de reloj empleado han sido **`r round(T_total[[3]]/60, digits = 2)` min** (`r T_total[[3]]` s).
+
+```{r sessionInfo, results='hold'}
+cat("Variables in memory:\n")
+ls()
+cat("\n")
+sessionInfo()
+```
