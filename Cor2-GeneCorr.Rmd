@@ -1,6 +1,6 @@
 ---
 title: "Correlaciones entre genes: coexpresión"
-subtitle: "Fichero _`r knitr::current_input()`_ || v260706"
+subtitle: "Fichero _`r knitr::current_input()`_ || v260709"
 author: 
   - "[MGC^![](https://info.orcid.org/wp-content/uploads/2019/11/orcid_16x16.png)^](https://orcid.org/0000-0002-0112-3550)"
   - "_Departamento de Biología Molecular y Bioquímica e IHSM-CSIC-UMA_"
@@ -28,8 +28,6 @@ abstract: |
   - Correo-e: <ihsm.bioinformatics@gmail.com>
 
   *****
-  
-  **Memoria ocupada** = `r round(pryr::mem_used()/1000000, 2)` MB
   
   **Ordenador**: `r Sys.info()[c(7, 4, 1, 5)]`
 
@@ -144,7 +142,7 @@ if(!require(visNetwork, quietly = TRUE)){
 
 ## Funciones del usuario
 
-Volvemos a incluir la función `calculaVars()` que definimos en el _script_ 3.1
+Volvemos a incluir la función `calculaVars()` que definimos en el _script_ `Cor1`
 
 ```{r calculaVarsFunct}
 calculaVars <- function(expData){
